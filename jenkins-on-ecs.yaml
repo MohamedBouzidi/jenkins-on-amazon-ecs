@@ -1,0 +1,518 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: <
+  CloudFormation stack for Jenkins on ECS
+  Allows Jenkins access to ECS Docker daemon
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          Default: 'Network'
+        Parameters:
+          - AllowedIPRange
+          - VPCIPRange
+      - Label:
+          Default: 'Launch Configuration'
+        Parameters:
+          - InstanceType
+          - InstanceAMI
+          - SystemsManagerAccess
+      - Label:
+          Default: 'Auto Scaling Group'
+        Parameters:
+          - MinSize
+          - MaxSize
+      - Label:
+          Default: 'ECS Cluster'
+        Parameters:
+          - ClusterName
+          - LoadBalanced
+          - DockerImage
+
+Parameters:
+  SystemsManagerAccess:
+    Description: 'Enable Systems Manager access'
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: true
+  AllowedIPRange:
+    Description: 'The public IP address range that can be used to connect to the instances'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '0.0.0.0/0'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  VPCIPRange:
+    Description: 'The private IP address range for allocating IPs within the VPC.'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '10.0.0.0/16'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  InstanceType:
+    Description: 'EC2 instance type'
+    Type: String
+    Default: 't2.micro'
+    AllowedValues:
+      - 't2.micro'
+      - 't2.small'
+      - 't2.medium'
+  InstanceAMI:
+    Description: 'EC2 AMI ID'
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id'
+    ConstraintDescription: 'Must be a valid EC2 instance type.'
+  ClusterName:
+    Description: 'Name of the cluster'
+    Type: String
+    Default: 'jenkins-cluster'
+  LoadBalanced:
+    Description: 'Allow load balacing of Jenkins tasks'
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: false
+  DockerImage:
+    Description: 'The docker image to use for Jenkins'
+    Type: String
+    Default: 'jenkins/jenkins:slim'
+  MinSize:
+    Description: 'Minimum number of ECS container instances'
+    Type: String
+    Default: '1'
+  MaxSize:
+    Description: 'Maximum number of ECS container instances'
+    Type: String
+    Default: '3'
+
+Conditions:
+  HasSystemsManager: !Equals
+    - true
+    - !Ref SystemsManagerAccess
+  IsLoadBalanced: !Equals
+    - true
+    - !Ref LoadBalanced
+  NotLoadBalanced: !Equals
+    - false
+    - !Ref LoadBalanced
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !Ref VPCIPRange
+      Tags:
+        - Key: Application
+          Value: !Ref AWS::StackId
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Application
+          Value: !Ref AWS::StackName
+        - Key: Network
+          Value: Public
+
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref Subnet
+
+  InternetGatewayRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      RouteTableId: !Ref RouteTable
+      GatewayId: !Ref InternetGateway
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref VPCIPRange
+      Tags:
+        - Key: Application
+          Value: !Ref AWS::StackId
+
+  ECSServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ecs.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: 'ecs-service'
+          PolicyDocument:
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'elasticloadbalancing:DeregisterInstancesFromLoadBalancer'
+                  - 'elasticloadbalancing:DeregisterTargets'
+                  - 'elasticloadbalancing:Describe*'
+                  - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
+                  - 'elasticloadbalancing:RegisterTargets'
+                  - 'ec2:Describe*'
+                  - 'ec2:AuthorizeSecurityGroupIngress'
+                Resource: '*'
+
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service:
+                - 'ec2.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        - PolicyName: 'ecs-elb-logs'
+          PolicyDocument:
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'ecs:*'
+                  - 'elasticloadbalancing:Describe*'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+
+  EC2SystemsManagerAccessPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasSystemsManager
+    Properties:
+      PolicyName: 'ssm-access'
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Action:
+              - 'ssmmessages:*'
+              - 'ssm:UpdateInstanceInformation'
+              - 'ec2messages:*'
+            Resource: '*'
+      Roles:
+        - !Ref EC2Role
+
+  JenkinsECSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref EC2Role
+
+  JenkinsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'SecurityGroup for Jenkins instances: master and slaves'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !If
+            - IsLoadBalanced
+            - !Ref VPCIPRange
+            - !Ref AllowedIPRange
+        - IpProtocol: 'tcp'
+          FromPort: 50000
+          ToPort: 50000
+          CidrIp: !Ref VPCIPRange
+
+  JenkinsELBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: IsLoadBalanced
+    Properties:
+      GroupDescription: 'SecurityGroup for Jenkins ELB'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref AllowedIPRange
+
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security group for EFS mount target'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: 'tcp'
+          FromPort: 2049
+          ToPort: 2049
+          CidrIp: !Ref VPCIPRange
+
+  JenkinsEFS:
+    Type: AWS::EFS::FileSystem
+    Condition: IsLoadBalanced
+    Properties:
+      FileSystemTags:
+        - Key: Name
+          Value: JenkinsEFS
+
+  MountTarget:
+    Type: AWS::EFS::MountTarget
+    Condition: IsLoadBalanced
+    Properties:
+      FileSystemId: !Ref JenkinsEFS
+      SubnetId: !Ref Subnet
+      SecurityGroups:
+        - !Ref EFSSecurityGroup
+
+  JenkinsELB:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Condition: IsLoadBalanced
+    Properties:
+      LoadBalancerName: 'jenkins-elb'
+      Scheme: 'internet-facing'
+      Subnets:
+        - !Ref Subnet
+      SecurityGroups:
+        - !Ref JenkinsELBSecurityGroup
+      Listeners:
+        - InstancePort: '8080'
+          InstanceProtocol: 'HTTP'
+          LoadBalancerPort: '80'
+          Protocol: 'HTTP'
+          PolicyNames:
+            - JenkinsELBStickiness
+      LBCookieStickinessPolicy:
+        - CookieExpirationPeriod: '3600'
+          PolicyName: 'JenkinsELBStickiness'
+      HealthCheck:
+        HealthyThreshold: '3'
+        Interval: '20'
+        Target: 'HTTP:8080/login'
+        Timeout: '2'
+        UnhealthyThreshold: '10'
+
+  JenkinsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ClusterName
+
+  JenkinsMasterTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: 'jenkins-master'
+      NetworkMode: 'bridge'
+      ContainerDefinitions:
+        - Name: 'jenkins-master'
+          Image: !Ref DockerImage
+          MountPoints:
+            - SourceVolume: 'data-volume'
+              ContainerPath: '/var/jenkins_home'
+            - SourceVolume: 'docker-volume'
+              ContainerPath: '/var/run/docker.sock'
+            - SourceVolume: 'docker-client'
+              ContainerPath: '/usr/bin/docker'
+          Essential: true
+          Cpu: 3
+          MemoryReservation: 512
+          PortMappings:
+            - HostPort: 8080
+              ContainerPort: 8080
+              Protocol: 'tcp'
+            - HostPort: 50000
+              ContainerPort: 50000
+              Protocol: 'tcp'
+      Volumes:
+        - Host:
+            SourcePath: '/data/'
+          Name: 'data-volume'
+        - Host:
+            SourcePath: '/var/run/docker.sock'
+          Name: 'docker-volume'
+        - Host:
+            SourcePath: '/usr/bin/docker'
+          Name: 'docker-client'
+
+  # find a better solution to enable/disable LB on the service
+  JenkinsECSService:
+    Type: AWS::ECS::Service
+    DependsOn: JenkinsECSAutoScaling
+    Condition: NotLoadBalanced
+    Properties:
+      Cluster: !Ref ClusterName
+      DesiredCount: 1
+      ServiceName: 'jenkins-master'
+      TaskDefinition: !Ref JenkinsMasterTaskDefinition
+
+  LBJenkinsECSService:
+    Type: AWS::ECS::Service
+    DependsOn: JenkinsELB
+    Condition: IsLoadBalanced
+    Properties:
+      Cluster: !Ref ClusterName
+      DesiredCount: 1
+      ServiceName: 'jenkins-master'
+      TaskDefinition: !Ref JenkinsMasterTaskDefinition
+      Role: !Ref ECSServiceRole
+      LoadBalancers:
+        - LoadBalancerName: 'jenkins-elb'
+          ContainerPort: 8080
+          ContainerName: 'jenkins-master'
+
+  JenkinsECSLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      AssociatePublicIpAddress: true
+      ImageId: !Ref InstanceAMI
+      IamInstanceProfile: !Ref JenkinsECSInstanceProfile
+      InstanceType: !Ref InstanceType
+      SecurityGroups:
+        - !Ref JenkinsSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: '/dev/xvdcz'
+          Ebs:
+            VolumeSize: 24
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+            - ''
+            - - |
+                #!/bin/bash -xe
+              - !If
+                - HasSystemsManager
+                - |
+                  systemctl start amazon-ssm-agent
+                  systemctl enable amazon-ssm-agent
+                - !Ref AWS::NoValue
+              - !If
+                - IsLoadBalanced
+                - !Sub |
+                  #Mount EFS volume
+                  yum install -y nfs-utils
+                  EC2_AVAIL_ZONE=`curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone`
+                  EC2_REGION=${AWS::Region}
+                  EFS_FILE_SYSTEM_ID=${JenkinsEFS}
+                  EFS_PATH=$EC2_AVAIL_ZONE.$EFS_FILE_SYSTEM_ID.efs.$EC2_REGION.amazonaws.com
+                  mkdir /data
+                  mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 $EFS_PATH:// /data
+                  #Give ownership to jenkins user
+                  chown 1000 /data
+                - |
+                  mkdir /data
+                  #Give ownership to jenkins user
+                  chown 1000 /data
+              - !Sub |
+                echo 'ECS_CLUSTER=jenkins-cluster' >> /etc/ecs/ecs.config
+                chmod 777 /var/run/docker.sock
+                yum install -y aws-cfn-bootstrap
+                /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource JenkinsECSAutoScaling
+
+  JenkinsECSAutoScaling:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref Subnet
+      LaunchConfigurationName: !Ref JenkinsECSLaunchConfiguration
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref MinSize
+      HealthCheckType: 'EC2'
+      HealthCheckGracePeriod: 400
+      Tags:
+        - Key: Name
+          Value: 'jenkins-ecs-instance'
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Count: !Ref MinSize
+        Timeout: PT15M
+
+  JenkinsClusterScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: 'ChangeInCapacity'
+      AutoScalingGroupName: !Ref JenkinsECSAutoScaling
+      EstimatedInstanceWarmup: 60
+      MetricAggregationType: 'Average'
+      PolicyType: 'StepScaling'
+      StepAdjustments:
+        - MetricIntervalLowerBound: 0
+          ScalingAdjustment: 2
+
+  JenkinsClusterScaleUpAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: 'CPU utilization peaked at 70% during the last minute'
+      AlarmName: 'JenkinsClusterScaleUpAlarm'
+      AlarmActions:
+        - !Ref JenkinsClusterScaleUpPolicy
+      Dimensions:
+        - Name: ClusterName
+          Value: 'jenkins-cluster'
+      MetricName: 'CPUReservation'
+      Namespace: 'AWS/ECS'
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold'
+      Statistic: 'Maximum'
+      Threshold: 70
+      Period: 60
+      EvaluationPeriods: 1
+      TreatMissingData: 'notBreaching'
+
+  JenkinsClusterScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: 'PercentChangeInCapacity'
+      AutoScalingGroupName: !Ref JenkinsECSAutoScaling
+      Cooldown: '120'
+      ScalingAdjustment: -50
+
+  JenkinsClusterScaleDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: 'CPU utilization is under 50% for the last 10 min (change 10 min to 45 min for prod use as you pay by the hour)'
+      AlarmName: 'JenkinsClusterScaleDownAlarm'
+      AlarmActions:
+        - !Ref JenkinsClusterScaleDownPolicy
+      Dimensions:
+        - Name: ClusterName
+          Value: 'jenkins-cluster'
+      MetricName: 'CPUReservation'
+      Namespace: 'AWS/ECS'
+      ComparisonOperator: 'LessThanThreshold'
+      Statistic: 'Maximum'
+      Threshold: 50
+      Period: 600
+      EvaluationPeriods: 1
+      TreatMissingData: 'notBreaching'
+
+Outputs:
+  JenkinsELB:
+    Condition: IsLoadBalanced
+    Description: 'Jenkins URL'
+    Value: !Join
+      - ''
+      - - 'http://'
+        - !GetAtt JenkinsELB.DNSName
