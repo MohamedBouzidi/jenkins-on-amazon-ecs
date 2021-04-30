@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: <
+  CloudFormation stack for Jenkins on ECS
+  Allows Jenkins access to ECS Docker daemon
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          Default: 'Network'
+        Parameters:
+          - VPCCIDR
+          - PublicSubnetCIDR
+          - PrivateSubnetCIDR
+          - UsePrivateSubnet
+
+Parameters:
+  VPCCIDR:
+    Description: 'IP range of the VPC'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '10.10.0.0/16'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  PublicSubnetCIDR:
+    Description: 'IP range of the public subnet'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '10.10.1.0/24'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  PrivateSubnetCIDR:
+    Description: 'IP range of the private subnet'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '10.10.2.0/24'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  UsePrivateSubnet:
+    Description: 'Whether to use the private subnet'
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: false
+
+Conditions:
+  CreatePrivateSubnet: !Equals [ true, !Ref UsePrivateSubnet ]
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !Ref VPCCIDR
+      Tags:
+        - Key: Application
+          Value: !Ref AWS::StackId
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Application
+          Value: !Ref AWS::StackName
+        - Key: Network
+          Value: Public
+
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  InternetGatewayRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: '0.0.0.0/0'
+      RouteTableId: !Ref PublicRouteTable
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetCIDR
+      Tags:
+        - Key: Application
+          Value: !Ref AWS::StackId
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Condition: CreatePrivateSubnet
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreatePrivateSubnet
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+
+  NatIp:
+    Type: AWS::EC2::EIP
+    Condition: CreatePrivateSubnet
+    DependsOn: GatewayToInternet
+    Properties:
+      Domain: !Ref VPC
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Condition: CreatePrivateSubnet
+    Properties:
+      AllocationId: !GetAtt NatIp.AllocationId
+      SubnetId: !Ref PublicSubnet
+
+  NatGatewayRoute:
+    Type: AWS::EC2::Route
+    Condition: CreatePrivateSubnet
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Condition: CreatePrivateSubnet
+    DependsOn: NatGateway
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetCIDR
+      MapPublicIpOnLaunch: false
+
+Outputs:
+  VPC:
+    Value: !Ref VPC
+  PublicSubnet:
+    Value: !Ref PublicSubnet
+  PrivateSubnet:
+    Condition: CreatePrivateSubnet
+    Value: !Ref PrivateSubnet

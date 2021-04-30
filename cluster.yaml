@@ -9,8 +9,12 @@ Metadata:
       - Label:
           Default: 'Network'
         Parameters:
+          - VPC
+          - VPCCIDR
+          - PublicSubnet
+          - PrivateSubnet
+          - UsePrivateSubnet
           - AllowedIPRange
-          - VPCIPRange
       - Label:
           Default: 'Launch Configuration'
         Parameters:
@@ -30,6 +34,30 @@ Metadata:
           - DockerImage
 
 Parameters:
+  VPC:
+    Description: 'VPC id'
+    Type: AWS::EC2::VPC::Id
+  VPCCIDR:
+    Description: 'IP range of the VPC'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '10.10.0.0/16'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  PublicSubnet:
+    Description: 'Public Subnet id'
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnet:
+    Description: 'Private Subnet id'
+    Type: AWS::EC2::Subnet::Id
+  UsePrivateSubnet:
+    Description: 'Whether to use the private subnet'
+    Type: String
+    AllowedValues:
+      - true
+      - false
+    Default: false
   SystemsManagerAccess:
     Description: 'Enable Systems Manager access'
     Type: String
@@ -45,14 +73,6 @@ Parameters:
     Default: '0.0.0.0/0'
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
-  VPCIPRange:
-    Description: 'The private IP address range for allocating IPs within the VPC.'
-    Type: String
-    MinLength: '9'
-    MaxLength: '18'
-    Default: '10.0.0.0/16'
-    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
-    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
   InstanceType:
     Description: 'EC2 instance type'
     Type: String
@@ -63,8 +83,7 @@ Parameters:
       - 't2.medium'
   InstanceAMI:
     Description: 'EC2 AMI ID'
-    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
-    Default: '/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id'
+    Type: 'AWS::EC2::Image::Id'
     ConstraintDescription: 'Must be a valid EC2 instance type.'
   ClusterName:
     Description: 'Name of the cluster'
@@ -94,66 +113,14 @@ Conditions:
   HasSystemsManager: !Equals
     - true
     - !Ref SystemsManagerAccess
-  IsLoadBalanced: !Equals
-    - true
-    - !Ref LoadBalanced
-  NotLoadBalanced: !Equals
-    - false
-    - !Ref LoadBalanced
+  IsLoadBalanced: !And
+    - !Equals [ true, !Ref LoadBalanced ]
+    - !Equals [ true, !Ref UsePrivateSubnet ]
+  NotLoadBalanced: !And
+    - !Equals [ false, !Ref LoadBalanced ]
+    - !Equals [ false, !Ref UsePrivateSubnet ]
 
 Resources:
-  VPC:
-    Type: AWS::EC2::VPC
-    Properties:
-      EnableDnsSupport: true
-      EnableDnsHostnames: true
-      CidrBlock: !Ref VPCIPRange
-      Tags:
-        - Key: Application
-          Value: !Ref AWS::StackId
-
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
-    Properties:
-      Tags:
-        - Key: Application
-          Value: !Ref AWS::StackName
-        - Key: Network
-          Value: Public
-
-  GatewayToInternet:
-    Type: AWS::EC2::VPCGatewayAttachment
-    Properties:
-      VpcId: !Ref VPC
-      InternetGatewayId: !Ref InternetGateway
-
-  RouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPC
-
-  SubnetRouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      RouteTableId: !Ref RouteTable
-      SubnetId: !Ref Subnet
-
-  InternetGatewayRoute:
-    Type: AWS::EC2::Route
-    Properties:
-      DestinationCidrBlock: '0.0.0.0/0'
-      RouteTableId: !Ref RouteTable
-      GatewayId: !Ref InternetGateway
-
-  Subnet:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: !Ref VPCIPRange
-      Tags:
-        - Key: Application
-          Value: !Ref AWS::StackId
-
   ECSServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -181,7 +148,7 @@ Resources:
                   - 'ec2:AuthorizeSecurityGroupIngress'
                 Resource: '*'
 
-  EC2Role:
+  ContainerInstanceRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -193,17 +160,8 @@ Resources:
             Action:
               - 'sts:AssumeRole'
       Path: '/'
-      Policies:
-        - PolicyName: 'ecs-elb-logs'
-          PolicyDocument:
-            Statement:
-              - Effect: 'Allow'
-                Action:
-                  - 'ecs:*'
-                  - 'elasticloadbalancing:Describe*'
-                  - 'logs:CreateLogStream'
-                  - 'logs:PutLogEvents'
-                Resource: '*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
 
   EC2SystemsManagerAccessPolicy:
     Type: AWS::IAM::Policy
@@ -220,19 +178,19 @@ Resources:
               - 'ec2messages:*'
             Resource: '*'
       Roles:
-        - !Ref EC2Role
+        - !Ref ContainerInstanceRole
 
   JenkinsECSInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Path: '/'
       Roles:
-        - !Ref EC2Role
+        - !Ref ContainerInstanceRole
 
   JenkinsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: 'SecurityGroup for Jenkins instances: master and slaves'
+      GroupDescription: 'Security group for Jenkins'
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: 'tcp'
@@ -240,18 +198,18 @@ Resources:
           ToPort: 8080
           CidrIp: !If
             - IsLoadBalanced
-            - !Ref VPCIPRange
+            - !Ref VPCCIDR
             - !Ref AllowedIPRange
         - IpProtocol: 'tcp'
           FromPort: 50000
           ToPort: 50000
-          CidrIp: !Ref VPCIPRange
+          CidrIp: !Ref VPCCIDR
 
   JenkinsELBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: IsLoadBalanced
     Properties:
-      GroupDescription: 'SecurityGroup for Jenkins ELB'
+      GroupDescription: 'Security group for ELB'
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: 'tcp'
@@ -268,7 +226,7 @@ Resources:
         - IpProtocol: 'tcp'
           FromPort: 2049
           ToPort: 2049
-          CidrIp: !Ref VPCIPRange
+          CidrIp: !Ref VPCCIDR
 
   JenkinsEFS:
     Type: AWS::EFS::FileSystem
@@ -283,7 +241,7 @@ Resources:
     Condition: IsLoadBalanced
     Properties:
       FileSystemId: !Ref JenkinsEFS
-      SubnetId: !Ref Subnet
+      SubnetId: !Ref PrivateSubnet
       SecurityGroups:
         - !Ref EFSSecurityGroup
 
@@ -294,7 +252,7 @@ Resources:
       LoadBalancerName: 'jenkins-elb'
       Scheme: 'internet-facing'
       Subnets:
-        - !Ref Subnet
+        - !Ref PublicSubnet
       SecurityGroups:
         - !Ref JenkinsELBSecurityGroup
       Listeners:
@@ -434,7 +392,7 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
-        - !Ref Subnet
+        - !Ref PrivateSubnet
       LaunchConfigurationName: !Ref JenkinsECSLaunchConfiguration
       MinSize: !Ref MinSize
       MaxSize: !Ref MaxSize
