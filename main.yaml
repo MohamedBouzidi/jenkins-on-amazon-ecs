@@ -10,8 +10,10 @@ Metadata:
           Default: 'Network'
         Parameters:
           - VPCCIDR
-          - PublicSubnetCIDR
-          - PrivateSubnetCIDR
+          - PublicSubnet1CIDR
+          - PublicSubnet2CIDR
+          - PrivateSubnet1CIDR
+          - PrivateSubnet2CIDR
           - AllowedIPRange
       - Label:
           Default: 'Launch Configuration'
@@ -43,7 +45,7 @@ Parameters:
     Default: '10.10.0.0/16'
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
-  PublicSubnetCIDR:
+  PublicSubnet1CIDR:
     Description: 'IP range of the public subnet'
     Type: String
     MinLength: '9'
@@ -51,12 +53,28 @@ Parameters:
     Default: '10.10.1.0/24'
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
-  PrivateSubnetCIDR:
-    Description: 'IP range of the private subnet'
+  PublicSubnet2CIDR:
+    Description: 'IP range of the public subnet'
     Type: String
     MinLength: '9'
     MaxLength: '18'
     Default: '10.10.2.0/24'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  PrivateSubnet1CIDR:
+    Description: 'IP range of the private subnet'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '10.10.3.0/24'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  PrivateSubnet2CIDR:
+    Description: 'IP range of the private subnet'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '10.10.4.0/24'
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
   UsePrivateSubnet:
@@ -132,8 +150,10 @@ Resources:
           - !Sub ".amazonaws.com/${SourceBucket}/network.yaml"
       Parameters:
         VPCCIDR: !Ref VPCCIDR
-        PublicSubnetCIDR: !Ref PublicSubnetCIDR
-        PrivateSubnetCIDR: !Ref PrivateSubnetCIDR
+        PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+        PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+        PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
+        PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
         UsePrivateSubnet: !Ref UsePrivateSubnet
 
   ClusterStack:
@@ -146,8 +166,10 @@ Resources:
           - !Sub ".amazonaws.com/${SourceBucket}/cluster.yaml"
       Parameters:
         VPC: !GetAtt NetworkStack.Outputs.VPC
-        PublicSubnet: !GetAtt NetworkStack.Outputs.PublicSubnet
-        PrivateSubnet: !GetAtt NetworkStack.Outputs.PrivateSubnet
+        PublicSubnet1: !GetAtt NetworkStack.Outputs.PublicSubnet1
+        PublicSubnet2: !GetAtt NetworkStack.Outputs.PublicSubnet2
+        PrivateSubnet1: !GetAtt NetworkStack.Outputs.PrivateSubnet1
+        PrivateSubnet2: !GetAtt NetworkStack.Outputs.PrivateSubnet2
         AllowedIPRange: !Ref AllowedIPRange
         InstanceType: !Ref InstanceType
         InstanceAMI: !Ref InstanceAMI

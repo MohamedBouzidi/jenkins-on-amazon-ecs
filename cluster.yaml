@@ -11,8 +11,10 @@ Metadata:
         Parameters:
           - VPC
           - VPCCIDR
-          - PublicSubnet
-          - PrivateSubnet
+          - PublicSubnet1
+          - PublicSubnet2
+          - PrivateSubnet1
+          - PrivateSubnet2
           - UsePrivateSubnet
           - AllowedIPRange
       - Label:
@@ -45,10 +47,16 @@ Parameters:
     Default: '10.10.0.0/16'
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
-  PublicSubnet:
+  PublicSubnet1:
     Description: 'Public Subnet id'
     Type: AWS::EC2::Subnet::Id
-  PrivateSubnet:
+  PublicSubnet2:
+    Description: 'Public Subnet id'
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnet1:
+    Description: 'Private Subnet id'
+    Type: AWS::EC2::Subnet::Id
+  PrivateSubnet2:
     Description: 'Private Subnet id'
     Type: AWS::EC2::Subnet::Id
   UsePrivateSubnet:
@@ -194,18 +202,29 @@ Resources:
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: 'tcp'
-          FromPort: 8080
-          ToPort: 8080
-          CidrIp: !If
-            - IsLoadBalanced
-            - !Ref VPCCIDR
-            - !Ref AllowedIPRange
-        - IpProtocol: 'tcp'
           FromPort: 50000
           ToPort: 50000
           CidrIp: !Ref VPCCIDR
 
-  JenkinsELBSecurityGroup:
+  JenkinsLoadBalancerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsLoadBalanced
+    Properties:
+      IpProtocol: '-1'
+      GroupId: !Ref JenkinsSecurityGroup
+      SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  JenkinsAllowedIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: NotLoadBalanced
+    Properties:
+      IpProtocol: 'tcp'
+      FromPort: 8080
+      ToPort: 8080
+      GroupId: !Ref JenkinsSecurityGroup
+      CidrIp: !Ref AllowedIPRange
+
+  LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Condition: IsLoadBalanced
     Properties:
@@ -216,6 +235,9 @@ Resources:
           FromPort: 80
           ToPort: 80
           CidrIp: !Ref AllowedIPRange
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          DestinationSecurityGroupId: !Ref JenkinsSecurityGroup
 
   EFSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -241,36 +263,44 @@ Resources:
     Condition: IsLoadBalanced
     Properties:
       FileSystemId: !Ref JenkinsEFS
-      SubnetId: !Ref PrivateSubnet
+      SubnetId: !Ref PrivateSubnet1
       SecurityGroups:
         - !Ref EFSSecurityGroup
 
-  JenkinsELB:
-    Type: AWS::ElasticLoadBalancing::LoadBalancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Condition: IsLoadBalanced
     Properties:
-      LoadBalancerName: 'jenkins-elb'
+      Name: 'jenkins-elb'
       Scheme: 'internet-facing'
       Subnets:
-        - !Ref PublicSubnet
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
       SecurityGroups:
-        - !Ref JenkinsELBSecurityGroup
-      Listeners:
-        - InstancePort: '8080'
-          InstanceProtocol: 'HTTP'
-          LoadBalancerPort: '80'
-          Protocol: 'HTTP'
-          PolicyNames:
-            - JenkinsELBStickiness
-      LBCookieStickinessPolicy:
-        - CookieExpirationPeriod: '3600'
-          PolicyName: 'JenkinsELBStickiness'
-      HealthCheck:
-        HealthyThreshold: '3'
-        Interval: '20'
-        Target: 'HTTP:8080/login'
-        Timeout: '2'
-        UnhealthyThreshold: '10'
+        - !Ref LoadBalancerSecurityGroup
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: IsLoadBalanced
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: 'HTTP'
+      Port: 80
+      DefaultActions:
+        - Type: 'forward'
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref JenkinsTargetGroup
+
+  JenkinsTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: /login
+      Name: JenkinsTargetGroup
+      TargetType: instance
+      Protocol: HTTP
+      Port: 8080
+      VpcId: !Ref VPC
 
   JenkinsCluster:
     Type: AWS::ECS::Cluster
@@ -296,12 +326,8 @@ Resources:
           Cpu: 3
           MemoryReservation: 512
           PortMappings:
-            - HostPort: 8080
-              ContainerPort: 8080
-              Protocol: 'tcp'
-            - HostPort: 50000
-              ContainerPort: 50000
-              Protocol: 'tcp'
+            - ContainerPort: 8080
+            - ContainerPort: 50000
       Volumes:
         - Host:
             SourcePath: '/data/'
@@ -326,7 +352,7 @@ Resources:
 
   LBJenkinsECSService:
     Type: AWS::ECS::Service
-    DependsOn: JenkinsELB
+    DependsOn: LoadBalancerListener
     Condition: IsLoadBalanced
     Properties:
       Cluster: !Ref ClusterName
@@ -335,7 +361,7 @@ Resources:
       TaskDefinition: !Ref JenkinsMasterTaskDefinition
       Role: !Ref ECSServiceRole
       LoadBalancers:
-        - LoadBalancerName: 'jenkins-elb'
+        - TargetGroupArn: !Ref JenkinsTargetGroup
           ContainerPort: 8080
           ContainerName: 'jenkins-master'
 
@@ -383,7 +409,7 @@ Resources:
                   #Give ownership to jenkins user
                   chown 1000 /data
               - !Sub |
-                echo 'ECS_CLUSTER=jenkins-cluster' >> /etc/ecs/ecs.config
+                echo 'ECS_CLUSTER=${ClusterName}' >> /etc/ecs/ecs.config
                 chmod 777 /var/run/docker.sock
                 yum install -y aws-cfn-bootstrap
                 /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource JenkinsECSAutoScaling
@@ -392,7 +418,8 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
-        - !Ref PrivateSubnet
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
       LaunchConfigurationName: !Ref JenkinsECSLaunchConfiguration
       MinSize: !Ref MinSize
       MaxSize: !Ref MaxSize
@@ -467,10 +494,10 @@ Resources:
       TreatMissingData: 'notBreaching'
 
 Outputs:
-  JenkinsELB:
+  LoadBalancer:
     Condition: IsLoadBalanced
     Description: 'Jenkins URL'
     Value: !Join
       - ''
       - - 'http://'
-        - !GetAtt JenkinsELB.DNSName
+        - !GetAtt LoadBalancer.DNSName

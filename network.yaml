@@ -10,8 +10,10 @@ Metadata:
           Default: 'Network'
         Parameters:
           - VPCCIDR
-          - PublicSubnetCIDR
-          - PrivateSubnetCIDR
+          - PublicSubnet1CIDR
+          - PublicSubnet2CIDR
+          - PrivateSubnet1CIDR
+          - PrivateSubnet2CIDR
           - UsePrivateSubnet
 
 Parameters:
@@ -23,7 +25,7 @@ Parameters:
     Default: '10.10.0.0/16'
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
-  PublicSubnetCIDR:
+  PublicSubnet1CIDR:
     Description: 'IP range of the public subnet'
     Type: String
     MinLength: '9'
@@ -31,12 +33,28 @@ Parameters:
     Default: '10.10.1.0/24'
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
-  PrivateSubnetCIDR:
-    Description: 'IP range of the private subnet'
+  PublicSubnet2CIDR:
+    Description: 'IP range of the public subnet'
     Type: String
     MinLength: '9'
     MaxLength: '18'
     Default: '10.10.2.0/24'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  PrivateSubnet1CIDR:
+    Description: 'IP range of the private subnet'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '10.10.3.0/24'
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
+  PrivateSubnet2CIDR:
+    Description: 'IP range of the private subnet'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '10.10.4.0/24'
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
   UsePrivateSubnet:
@@ -81,11 +99,17 @@ Resources:
     Properties:
       VpcId: !Ref VPC
 
-  PublicSubnetRouteTableAssociation:
+  PublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       RouteTableId: !Ref PublicRouteTable
-      SubnetId: !Ref PublicSubnet
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
 
   InternetGatewayRoute:
     Type: AWS::EC2::Route
@@ -94,11 +118,22 @@ Resources:
       RouteTableId: !Ref PublicRouteTable
       GatewayId: !Ref InternetGateway
 
-  PublicSubnet:
+  PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Ref PublicSubnetCIDR
+      CidrBlock: !Ref PublicSubnet1CIDR
+      AvailabilityZone: !Select [ 0, Fn::GetAZs: !Ref 'AWS::Region' ]
+      Tags:
+        - Key: Application
+          Value: !Ref AWS::StackId
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnet2CIDR
+      AvailabilityZone: !Select [ 1, Fn::GetAZs: !Ref 'AWS::Region' ]
       Tags:
         - Key: Application
           Value: !Ref AWS::StackId
@@ -109,12 +144,19 @@ Resources:
     Properties:
       VpcId: !Ref VPC
 
-  PrivateSubnetRouteTableAssociation:
+  PrivateSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Condition: CreatePrivateSubnet
     Properties:
       RouteTableId: !Ref PrivateRouteTable
-      SubnetId: !Ref PrivateSubnet
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: CreatePrivateSubnet
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
 
   NatIp:
     Type: AWS::EC2::EIP
@@ -128,7 +170,7 @@ Resources:
     Condition: CreatePrivateSubnet
     Properties:
       AllocationId: !GetAtt NatIp.AllocationId
-      SubnetId: !Ref PublicSubnet
+      SubnetId: !Ref PublicSubnet1
 
   NatGatewayRoute:
     Type: AWS::EC2::Route
@@ -138,20 +180,36 @@ Resources:
       DestinationCidrBlock: '0.0.0.0/0'
       NatGatewayId: !Ref NatGateway
 
-  PrivateSubnet:
+  PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Condition: CreatePrivateSubnet
     DependsOn: NatGateway
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Ref PrivateSubnetCIDR
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      AvailabilityZone: !Select [ 0, Fn::GetAZs: !Ref 'AWS::Region' ]
+      MapPublicIpOnLaunch: false
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Condition: CreatePrivateSubnet
+    DependsOn: NatGateway
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      AvailabilityZone: !Select [ 1, Fn::GetAZs: !Ref 'AWS::Region' ]
       MapPublicIpOnLaunch: false
 
 Outputs:
   VPC:
     Value: !Ref VPC
-  PublicSubnet:
-    Value: !Ref PublicSubnet
-  PrivateSubnet:
+  PublicSubnet1:
+    Value: !Ref PublicSubnet1
+  PublicSubnet2:
+    Value: !Ref PublicSubnet2
+  PrivateSubnet1:
     Condition: CreatePrivateSubnet
-    Value: !Ref PrivateSubnet
+    Value: !Ref PrivateSubnet1
+  PrivateSubnet2:
+    Condition: CreatePrivateSubnet
+    Value: !Ref PrivateSubnet2
