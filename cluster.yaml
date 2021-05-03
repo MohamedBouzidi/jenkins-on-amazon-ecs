@@ -129,33 +129,6 @@ Conditions:
     - !Equals [ false, !Ref UsePrivateSubnet ]
 
 Resources:
-  ECSServiceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Statement:
-          - Effect: 'Allow'
-            Principal:
-              Service:
-                - 'ecs.amazonaws.com'
-            Action:
-              - 'sts:AssumeRole'
-      Path: '/'
-      Policies:
-        - PolicyName: 'ecs-service'
-          PolicyDocument:
-            Statement:
-              - Effect: 'Allow'
-                Action:
-                  - 'elasticloadbalancing:DeregisterInstancesFromLoadBalancer'
-                  - 'elasticloadbalancing:DeregisterTargets'
-                  - 'elasticloadbalancing:Describe*'
-                  - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
-                  - 'elasticloadbalancing:RegisterTargets'
-                  - 'ec2:Describe*'
-                  - 'ec2:AuthorizeSecurityGroupIngress'
-                Resource: '*'
-
   ContainerInstanceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -188,6 +161,62 @@ Resources:
       Roles:
         - !Ref ContainerInstanceRole
 
+  JenkinsTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: jenkins-task-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      Policies:
+        # Policy for Jenkins amazon-ecs plugin
+        - PolicyName: create-jenkins-agents
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - ecs:RegisterTaskDefinition
+                  - ecs:ListClusters
+                  - ecs:DescribeContainerInstances
+                  - ecs:ListTaskDefinitions
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DeregisterTaskDefinition
+                Effect: Allow
+                Resource: '*'
+              - Action:
+                  - ecs:ListContainerInstances
+                Effect: Allow
+                Resource:
+                  - !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+              - Action:
+                  - ecs:RunTask
+                Effect: Allow
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      - !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/*
+              - Action:
+                  - ecs:StopTask
+                Effect: Allow
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      - !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/*
+              - Action:
+                  - ecs:DescribeTasks
+                Effect: Allow
+                Condition:
+                  ArnEquals:
+                    ecs:cluster:
+                      - !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+                Resource: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/*
+
   JenkinsECSInstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
@@ -210,7 +239,9 @@ Resources:
     Type: AWS::EC2::SecurityGroupIngress
     Condition: IsLoadBalanced
     Properties:
-      IpProtocol: '-1'
+      IpProtocol: 'tcp'
+      FromPort: 8080
+      ToPort: 8080
       GroupId: !Ref JenkinsSecurityGroup
       SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
 
@@ -236,7 +267,9 @@ Resources:
           ToPort: 80
           CidrIp: !Ref AllowedIPRange
       SecurityGroupEgress:
-        - IpProtocol: '-1'
+        - IpProtocol: 'tcp'
+          FromPort: 8080
+          ToPort: 8080
           DestinationSecurityGroupId: !Ref JenkinsSecurityGroup
 
   EFSSecurityGroup:
@@ -258,12 +291,21 @@ Resources:
         - Key: Name
           Value: JenkinsEFS
 
-  MountTarget:
+  MountTarget1:
     Type: AWS::EFS::MountTarget
     Condition: IsLoadBalanced
     Properties:
       FileSystemId: !Ref JenkinsEFS
       SubnetId: !Ref PrivateSubnet1
+      SecurityGroups:
+        - !Ref EFSSecurityGroup
+
+  MountTarget2:
+    Type: AWS::EFS::MountTarget
+    Condition: IsLoadBalanced
+    Properties:
+      FileSystemId: !Ref JenkinsEFS
+      SubnetId: !Ref PrivateSubnet2
       SecurityGroups:
         - !Ref EFSSecurityGroup
 
@@ -307,11 +349,14 @@ Resources:
     Properties:
       ClusterName: !Ref ClusterName
 
-  JenkinsMasterTaskDefinition:
+  JenkinsTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: 'jenkins-master'
       NetworkMode: 'bridge'
+      TaskRoleArn: !Ref JenkinsTaskRole
+      RequiresCompatibilities:
+        - 'EC2'
       ContainerDefinitions:
         - Name: 'jenkins-master'
           Image: !Ref DockerImage
@@ -348,8 +393,10 @@ Resources:
       Cluster: !Ref ClusterName
       DesiredCount: 1
       ServiceName: 'jenkins-master'
-      TaskDefinition: !Ref JenkinsMasterTaskDefinition
+      LaunchType: 'EC2'
+      TaskDefinition: !Ref JenkinsTaskDefinition
 
+  # Requires the AWSServiceRoleForECS service-linked role
   LBJenkinsECSService:
     Type: AWS::ECS::Service
     DependsOn: LoadBalancerListener
@@ -358,12 +405,36 @@ Resources:
       Cluster: !Ref ClusterName
       DesiredCount: 1
       ServiceName: 'jenkins-master'
-      TaskDefinition: !Ref JenkinsMasterTaskDefinition
-      Role: !Ref ECSServiceRole
+      LaunchType: 'EC2'
+      TaskDefinition: !Ref JenkinsTaskDefinition
       LoadBalancers:
         - TargetGroupArn: !Ref JenkinsTargetGroup
           ContainerPort: 8080
           ContainerName: 'jenkins-master'
+      ServiceRegistries:
+        - RegistryArn: !GetAtt DiscoveryService.Arn
+          ContainerName: 'jenkins-master'
+          ContainerPort: 8080
+
+  PrivateNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: jenkins-on-ecs.dev
+      Vpc: !Ref VPC
+
+  DiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Description: Discovery service for Jenkins Master
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - TTL: 60
+            Type: SRV
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      Name: jenkins-master
+      NamespaceId: !Ref PrivateNamespace
 
   JenkinsECSLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
@@ -425,7 +496,7 @@ Resources:
       MaxSize: !Ref MaxSize
       DesiredCapacity: !Ref MinSize
       HealthCheckType: 'EC2'
-      HealthCheckGracePeriod: 400
+      HealthCheckGracePeriod: 240
       Tags:
         - Key: Name
           Value: 'jenkins-ecs-instance'
