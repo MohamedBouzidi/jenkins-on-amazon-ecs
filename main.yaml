@@ -34,9 +34,6 @@ Metadata:
           - DockerImage
 
 Parameters:
-  SourceBucket:
-    Description: 'location of network and cluster templates'
-    Type: String
   VPCCIDR:
     Description: 'IP range of the VPC'
     Type: String
@@ -136,18 +133,11 @@ Parameters:
     Type: String
     Default: '3'
 
-Conditions:
-  IsNVirginia: !Equals [ !Ref AWS::Region, "us-east-1" ]
-
 Resources:
   NetworkStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Join
-        - ''
-        - - "https://s3"
-          - !If [ IsNVirginia, "", !Sub "-${AWS::Region}" ]
-          - !Sub ".amazonaws.com/${SourceBucket}/network.yaml"
+      TemplateURL: "./network.yaml"
       Parameters:
         VPCCIDR: !Ref VPCCIDR
         PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
@@ -159,11 +149,7 @@ Resources:
   ClusterStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Join
-        - ''
-        - - "https://s3"
-          - !If [ IsNVirginia, "", !Sub "-${AWS::Region}" ]
-          - !Sub ".amazonaws.com/${SourceBucket}/cluster.yaml"
+      TemplateURL: "./cluster.yaml"
       Parameters:
         VPC: !GetAtt NetworkStack.Outputs.VPC
         PublicSubnet1: !GetAtt NetworkStack.Outputs.PublicSubnet1

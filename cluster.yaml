@@ -55,10 +55,10 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
   PrivateSubnet1:
     Description: 'Private Subnet id'
-    Type: AWS::EC2::Subnet::Id
+    Type: String # This could be AWS::NoValue
   PrivateSubnet2:
     Description: 'Private Subnet id'
-    Type: AWS::EC2::Subnet::Id
+    Type: String # This could be AWS::NoValue
   UsePrivateSubnet:
     Description: 'Whether to use the private subnet'
     Type: String
@@ -127,6 +127,9 @@ Conditions:
   NotLoadBalanced: !And
     - !Equals [ false, !Ref LoadBalanced ]
     - !Equals [ false, !Ref UsePrivateSubnet ]
+  UsePrivateSubnetCondition: !Equals
+    - true
+    - !Ref UsePrivateSubnet
 
 Resources:
   ContainerInstanceRole:
@@ -489,8 +492,8 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       VPCZoneIdentifier:
-        - !Ref PrivateSubnet1
-        - !Ref PrivateSubnet2
+        - !If [ UsePrivateSubnetCondition, !Ref PrivateSubnet1, !Ref PublicSubnet1 ]
+        - !If [ UsePrivateSubnetCondition, !Ref PrivateSubnet2, !Ref PublicSubnet2 ]
       LaunchConfigurationName: !Ref JenkinsECSLaunchConfiguration
       MinSize: !Ref MinSize
       MaxSize: !Ref MaxSize

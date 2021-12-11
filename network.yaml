@@ -208,8 +208,6 @@ Outputs:
   PublicSubnet2:
     Value: !Ref PublicSubnet2
   PrivateSubnet1:
-    Condition: CreatePrivateSubnet
-    Value: !Ref PrivateSubnet1
+    Value: !If [CreatePrivateSubnet, !Ref PrivateSubnet1, AWS::NoValue]
   PrivateSubnet2:
-    Condition: CreatePrivateSubnet
-    Value: !Ref PrivateSubnet2
+    Value: !If [CreatePrivateSubnet, !Ref PrivateSubnet2, AWS::NoValue]
