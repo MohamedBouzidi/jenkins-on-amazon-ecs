@@ -1,0 +1,52 @@
+jenkins:
+  numExecutors: 0
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+       - id: ${JENKINS_ADMIN_ID}
+         password: ${JENKINS_ADMIN_PASSWORD}
+  authorizationStrategy:
+    globalMatrix:
+      permissions:
+        - "Overall/Administer:admin"
+        - "Overall/Read:authenticated"
+  slaveAgentPort: 50000
+  remotingSecurity:
+    enabled: true
+  clouds:
+        - ecs:
+              allowedOverrides: "inheritFrom,label,memory,cpu,image"
+              credentialsId: ""
+              cluster: ${CLUSTER_ARN}
+              name: "ec2-cloud"
+              regionName: ${CLUSTER_REGION}
+              retentionTimeout: 10
+              jenkinsUrl: "http://${JENKINS_TUNNEL_IP}:${JENKINS_SERVER_PORT}"
+              tunnel: "${JENKINS_TUNNEL_IP}:${JENKINS_TUNNEL_PORT}"
+              templates:
+                  - cpu: "256"
+                    assignPublicIp: false
+                    image: "jenkins/inbound-agent"
+                    label: "ecs-agent"
+                    executionRole: ${EXECUTION_ROLE_ARN}
+                    launchType: "EC2"
+                    memory: 0
+                    memoryReservation: 400
+                    networkMode: "default"
+                    logDriver: awslogs
+                    logDriverOptions:
+                      - name: awslogs-region
+                        value: ${CLUSTER_REGION}
+                      - name: awslogs-group
+                        value: ${AGENT_LOG_GROUP}
+                    privileged: false
+                    remoteFSRoot: "/home/jenkins"
+                    sharedMemorySize: 0
+                    templateName: "ecs-agent"
+                    uniqueRemoteFSRoot: false
+security:
+  queueItemAuthenticator:
+    authenticators:
+    - global:
+        strategy: triggeringUsersAuthorizationStrategy

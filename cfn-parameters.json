@@ -1,0 +1,6 @@
+{
+    "Parameters": {
+        "UsePrivateSubnet": "true",
+        "LoadBalanced": "true"
+    }
+}

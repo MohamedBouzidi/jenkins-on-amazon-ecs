@@ -20,12 +20,14 @@ aws cloudformation package \
 
 echo "Deploying stack..."
 
-# aws cloudformation create-stack --stack-name jenkins-on-ecs \
-# --template-body file://packaged.yaml \
-# --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-# --disable-rollback
+aws cloudformation create-stack --stack-name jenkins-on-ecs \
+--template-body file://packaged.yaml \
+--capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+--parameters ParameterKey=UsePrivateSubnet,ParameterValue=true \
+--disable-rollback
 
-aws cloudformation deploy \
---stack-name jenkins-on-ecs \
---template-file packaged.yaml \
---capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM
+# aws cloudformation deploy \
+# --stack-name jenkins-on-ecs \
+# --template-file packaged.yaml \
+# --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+# --parameter-overrides file://cfn-parameters.json
