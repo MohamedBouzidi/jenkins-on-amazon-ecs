@@ -30,8 +30,13 @@ Metadata:
           Default: 'ECS Cluster'
         Parameters:
           - ClusterName
-          - LoadBalanced
-          - DockerImage
+          - JenkinsControllerRepositoryUri
+          - JenkinsControllerRepositoryArn
+      - Label:
+          Default: 'Jenkins Controller'
+        Parameters:
+          - AdminUsername
+          - AdminPassword
 
 Parameters:
   VPCCIDR:
@@ -74,13 +79,6 @@ Parameters:
     Default: '10.10.4.0/24'
     AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
     ConstraintDescription: 'must be a valid IP CIDR range of the form x.x.x.x/x.'
-  UsePrivateSubnet:
-    Description: 'Whether to use the private subnet'
-    Type: String
-    AllowedValues:
-      - true
-      - false
-    Default: false
   SystemsManagerAccess:
     Description: 'Enable Systems Manager access'
     Type: String
@@ -113,17 +111,18 @@ Parameters:
     Description: 'Name of the cluster'
     Type: String
     Default: 'jenkins-cluster'
-  LoadBalanced:
-    Description: 'Allow load balacing of Jenkins tasks'
+  JenkinsControllerRepositoryUri:
+    Description: 'Jenkins controller ECR image URI'
     Type: String
-    AllowedValues:
-      - true
-      - false
-    Default: false
-  DockerImage:
-    Description: 'The docker image to use for Jenkins'
+  JenkinsControllerRepositoryArn:
+    Description: 'Jenkins controller ECR repository ARN'
     Type: String
-    Default: 'jenkins/jenkins:slim'
+  AdminUsername:
+    Description: 'Jenkins Admin Username'
+    Type: String
+  AdminPassword:
+    Description: 'Jenkins Admin Password'
+    Type: String
   MinSize:
     Description: 'Minimum number of ECS container instances'
     Type: String
@@ -144,7 +143,6 @@ Resources:
         PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
         PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
         PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
-        UsePrivateSubnet: !Ref UsePrivateSubnet
 
   ClusterStack:
     Type: AWS::CloudFormation::Stack
@@ -163,6 +161,7 @@ Resources:
         MinSize: !Ref MinSize
         MaxSize: !Ref MaxSize
         ClusterName: !Ref ClusterName
-        LoadBalanced: !Ref LoadBalanced
-        DockerImage: !Ref DockerImage
-        UsePrivateSubnet: !Ref UsePrivateSubnet
+        JenkinsControllerRepositoryUri: !Ref JenkinsControllerRepositoryUri
+        JenkinsControllerRepositoryArn: !Ref JenkinsControllerRepositoryArn
+        AdminUsername: !Ref AdminUsername
+        AdminPassword: !Ref AdminPassword

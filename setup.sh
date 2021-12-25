@@ -1,6 +1,8 @@
 #!/bin/bash
 
+STACK_NAME="jenkins-on-ecs-setup"
 CONFIG_BUCKET_NAME=$([ $# -gt 0 ] && echo $1 || echo "mgt-jenkins-configuration")
+JENKINS_REPOSITORY_NAME="${STACK_NAME}-jenkins-controller"
 
 echo CONFIG_BUCKET_NAME=${CONFIG_BUCKET_NAME}
 
@@ -22,14 +24,20 @@ aws s3 cp --recursive \
     assets/jenkins/controller \
     s3://${CONFIG_BUCKET_NAME}/jenkins/controller
 
-echo "Deploying setup stack..."
+echo "Checking if repository exists already..."
 
-STACK_NAME="jenkins-on-ecs-setup"
+aws ecr describe-repositories --repository-name ${JENKINS_REPOSITORY_NAME} > /dev/null 2>&1 && \
+echo "Jenkins repository exists. Deleting..." && \
+aws ecr delete-repository --repository-name ${JENKINS_REPOSITORY_NAME} --force
+
+echo "Deploying setup stack..."
 
 aws cloudformation create-stack \
 --stack-name ${STACK_NAME} \
 --template-body file://setup.yaml \
---parameters ParameterKey=ConfigurationBucketARN,ParameterValue=arn:aws:s3:::${CONFIG_BUCKET_NAME} \
+--parameters \
+    ParameterKey=ConfigurationBucketARN,ParameterValue=arn:aws:s3:::${CONFIG_BUCKET_NAME} \
+    ParameterKey=JenkinsControllerRepositoryName,ParameterValue=${JENKINS_REPOSITORY_NAME} \
 --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
 --disable-rollback \
 --region ${REGION}
@@ -37,4 +45,22 @@ aws cloudformation create-stack \
 echo "Waiting for stack to create..."
 
 aws cloudformation wait stack-create-complete \
+--stack-name ${STACK_NAME}
+
+echo "Exporting repository information..."
+
+res=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME} \
+    --query "Stacks[0].Outputs[*].{name: OutputKey, value: OutputValue} | [].join('=', [name,value]) | @.join('#', @)" |\
+     sed -e 's/"//g' | tr '#' '\n')
+
+eval $(echo $res | while read e
+do
+    echo "export ${e}"
+done)
+
+echo "Custom Jenkins image generated. Deleting stack..."
+
+aws cloudformation delete-stack --stack-name ${STACK_NAME}
+
+aws cloudformation wait stack-delete-complete \
 --stack-name ${STACK_NAME}

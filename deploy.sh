@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source ./setup.sh
+
 REGION=$(aws configure get region)
 
 CF_BUCKET=$(aws s3api list-buckets \
@@ -23,11 +25,10 @@ echo "Deploying stack..."
 aws cloudformation create-stack --stack-name jenkins-on-ecs \
 --template-body file://packaged.yaml \
 --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
---parameters ParameterKey=UsePrivateSubnet,ParameterValue=true \
---disable-rollback
+--parameters \
+    ParameterKey=JenkinsControllerRepositoryUri,ParameterValue="${JenkinsControllerRepositoryUri}" \
+    ParameterKey=JenkinsControllerRepositoryArn,ParameterValue="${JenkinsControllerRepositoryArn}" \
+    ParameterKey=AdminUsername,ParameterValue="admin" \
+    ParameterKey=AdminPassword,ParameterValue="password"
 
-# aws cloudformation deploy \
-# --stack-name jenkins-on-ecs \
-# --template-file packaged.yaml \
-# --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-# --parameter-overrides file://cfn-parameters.json
+aws cloudformation wait stack-create-complete --stack-name jenkins-on-ecs

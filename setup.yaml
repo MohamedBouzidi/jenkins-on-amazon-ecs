@@ -10,6 +10,12 @@ Parameters:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Description: Image for configuration instance
     Default: "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+  JenkinsControllerRepositoryName:
+    Type: String
+    Description: Jenkins Controller ECR repository name
+  # SecurityGroupId:
+  #   Type: AWS::EC2::SecurityGroup::Id
+  #   Description: Security Group for configuration instance
 
 Resources:
 
@@ -46,9 +52,9 @@ Resources:
               - Effect: Allow
                 Action: "ecr:GetAuthorizationToken"
                 Resource: "*"
-              # - Effect: Allow
-              #   Action: "*"
-              #   Resource: !GetAtt JenkinsControllerRepository.Arn
+              - Effect: Allow
+                Action: "*"
+                Resource: !GetAtt JenkinsControllerRepository.Arn
               - Effect: Allow
                 Action: "s3:ListBucket"
                 Resource: !Ref ConfigurationBucketARN
@@ -67,10 +73,9 @@ Resources:
       InstanceType: t2.micro
       ImageId: !Ref InstanceAMI
       IamInstanceProfile: !Ref SetupInstanceProfile
-      KeyName: DefaultKeyPair
-      SecurityGroupIds:
-        - "sg-0b66adb66f3032006"
-        - "sg-07da87deff901ab2c"
+      # KeyName: DefaultKeyPair
+      # SecurityGroupIds:
+      #   - !Ref SecurityGroupId
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash -ex
@@ -86,23 +91,25 @@ Resources:
           aws s3 cp --recursive s3://mgt-jenkins-configuration/jenkins/controller .
 
           docker build -t jenkins:custom .
+          docker tag jenkins:custom ${JenkinsControllerRepository.RepositoryUri}
+          docker push ${JenkinsControllerRepository.RepositoryUri}
 
-          PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
-          PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+          # PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+          # PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
 
-          docker run -d --name jenkins --rm \
-          -p 0.0.0.0:8080:8080 -p 0.0.0.0:50000:50000 \
-          --env JENKINS_ADMIN_ID=admin \
-          --env JENKINS_ADMIN_PASSWORD=password \
-          --env CLUSTER_ARN="arn:aws:ecs:us-east-1:929264800569:cluster/test" \
-          --env CLUSTER_REGION=us-east-1 \
-          --env EXECUTION_ROLE_ARN="${JenkinsAgentTaskRole.Arn}" \
-          --env JENKINS_SERVER_IP="${!PUBLIC_IP}" \
-          --env JENKINS_SERVER_PORT=8080 \
-          --env JENKINS_TUNNEL_IP="${!PRIVATE_IP}" \
-          --env JENKINS_TUNNEL_PORT=50000 \
-          --env AGENT_LOG_GROUP=jenkins-ecs \
-          jenkins:custom
+          # docker run -d --name jenkins --rm \
+          # -p 0.0.0.0:8080:8080 -p 0.0.0.0:50000:50000 \
+          # --env JENKINS_ADMIN_ID=admin \
+          # --env JENKINS_ADMIN_PASSWORD=password \
+          # --env CLUSTER_ARN="arn:aws:ecs:us-east-1:929264800569:cluster/test" \
+          # --env CLUSTER_REGION=us-east-1 \
+          # --env EXECUTION_ROLE_ARN="${JenkinsAgentTaskRole.Arn}" \
+          # --env JENKINS_SERVER_IP="${!PUBLIC_IP}" \
+          # --env JENKINS_SERVER_PORT=8080 \
+          # --env JENKINS_TUNNEL_IP="${!PRIVATE_IP}" \
+          # --env JENKINS_TUNNEL_PORT=50000 \
+          # --env AGENT_LOG_GROUP=jenkins-ecs \
+          # jenkins:custom
 
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} \
             --resource SetupInstance --region ${AWS::Region}
@@ -111,12 +118,19 @@ Resources:
         Count: 1
         Timeout: PT15M
 
-  JenkinsAgentsLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: jenkins-ecs
-
-  # JenkinsControllerRepository:
-  #   Type: AWS::ECR::Repository
+  # JenkinsAgentsLogGroup:
+  #   Type: AWS::Logs::LogGroup
   #   Properties:
-  #     RepositoryName: !Sub "${AWS::StackName}-jenkins-controller"
+  #     LogGroupName: jenkins-ecs
+
+  JenkinsControllerRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: !Ref JenkinsControllerRepositoryName
+
+Outputs:
+  JenkinsControllerRepositoryUri:
+    Value: !GetAtt JenkinsControllerRepository.RepositoryUri
+  JenkinsControllerRepositoryArn:
+    Value: !GetAtt JenkinsControllerRepository.Arn
