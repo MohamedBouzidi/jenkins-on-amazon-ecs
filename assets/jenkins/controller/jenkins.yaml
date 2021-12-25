@@ -32,12 +32,12 @@ jenkins:
                     memory: 0
                     memoryReservation: 400
                     networkMode: "default"
-                    logDriver: awslogs
-                    logDriverOptions:
-                      - name: awslogs-region
-                        value: ${CLUSTER_REGION}
-                      - name: awslogs-group
-                        value: ${AGENT_LOG_GROUP}
+                    # logDriver: awslogs
+                    # logDriverOptions:
+                    #   - name: awslogs-region
+                    #     value: ${CLUSTER_REGION}
+                    #   - name: awslogs-group
+                    #     value: ${AGENT_LOG_GROUP}
                     privileged: false
                     remoteFSRoot: "/home/jenkins"
                     sharedMemorySize: 0

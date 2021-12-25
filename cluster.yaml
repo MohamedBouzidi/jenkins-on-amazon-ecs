@@ -246,11 +246,29 @@ Resources:
   JenkinsLoadBalancerIngress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
-      IpProtocol: '-1'
-      FromPort: 0
-      ToPort: 65535
+      IpProtocol: 'tcp'
+      FromPort: 8080
+      ToPort: 8080
       GroupId: !Ref JenkinsSecurityGroup
       SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  JenkinsURLSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: 'tcp'
+      FromPort: 8080
+      ToPort: 8080
+      GroupId: !Ref JenkinsSecurityGroup
+      SourceSecurityGroupId: !Ref JenkinsSecurityGroup
+
+  JenkinsTunnelSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      IpProtocol: 'tcp'
+      FromPort: 50000
+      ToPort: 50000
+      GroupId: !Ref JenkinsSecurityGroup
+      SourceSecurityGroupId: !Ref JenkinsSecurityGroup
 
   LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -263,9 +281,9 @@ Resources:
           ToPort: 80
           CidrIp: !Ref AllowedIPRange
       SecurityGroupEgress:
-        - IpProtocol: '-1'
-          FromPort: 0
-          ToPort: 65535
+        - IpProtocol: 'tcp'
+          FromPort: 8080
+          ToPort: 8080
           DestinationSecurityGroupId: !Ref JenkinsSecurityGroup
 
   EFSSecurityGroup:
@@ -334,7 +352,7 @@ Resources:
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 2
       Name: JenkinsTargetGroup
-      TargetType: instance
+      TargetType: ip
       Protocol: HTTP
       Port: 8080
       VpcId: !Ref VPC
@@ -348,7 +366,7 @@ Resources:
     Type: AWS::ECS::TaskDefinition
     Properties:
       Family: 'jenkins-master'
-      NetworkMode: 'bridge'
+      NetworkMode: 'awsvpc'
       TaskRoleArn: !Ref JenkinsTaskRole
       RequiresCompatibilities:
         - 'EC2'
@@ -379,8 +397,8 @@ Resources:
               Value: "8080"
             - Name: EXECUTION_ROLE_ARN
               Value: ""
-            - Name: AGENT_LOG_GROUP
-              Value: ""
+            # - Name: AGENT_LOG_GROUP
+            #   Value: ""
             - Name: AGENT_LABEL
               Value: "ecs-cloud-agent"
           Essential: true
@@ -414,6 +432,13 @@ Resources:
         - TargetGroupArn: !Ref JenkinsTargetGroup
           ContainerPort: 8080
           ContainerName: 'jenkins-master'
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Ref JenkinsSecurityGroup
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
       ServiceRegistries:
         - RegistryArn: !GetAtt DiscoveryService.Arn
           ContainerName: 'jenkins-master'

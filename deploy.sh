@@ -22,7 +22,9 @@ aws cloudformation package \
 
 echo "Deploying stack..."
 
-aws cloudformation create-stack --stack-name jenkins-on-ecs \
+STACK_NAME="jenkins-on-ecs"
+
+aws cloudformation create-stack --stack-name ${STACK_NAME} \
 --template-body file://packaged.yaml \
 --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
 --parameters \
@@ -31,4 +33,9 @@ aws cloudformation create-stack --stack-name jenkins-on-ecs \
     ParameterKey=AdminUsername,ParameterValue="admin" \
     ParameterKey=AdminPassword,ParameterValue="password"
 
-aws cloudformation wait stack-create-complete --stack-name jenkins-on-ecs
+aws cloudformation wait stack-create-complete --stack-name ${STACK_NAME}
+
+JENKINS_ENDPOINT=$(aws cloudformation describe-stacks --stack-name ${STACK_NAME} \
+--query "Stacks[0].Outputs[?OutputKey == 'JenkinsWebUI'].OutputValue | [0]" | sed -e 's/"//g')
+
+echo "Stack deployed. Access Jenkins WebUI through: ${JENKINS_ENDPOINT}"

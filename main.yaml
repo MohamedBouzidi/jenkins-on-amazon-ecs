@@ -126,7 +126,7 @@ Parameters:
   MinSize:
     Description: 'Minimum number of ECS container instances'
     Type: String
-    Default: '1'
+    Default: '2'
   MaxSize:
     Description: 'Maximum number of ECS container instances'
     Type: String
@@ -165,3 +165,8 @@ Resources:
         JenkinsControllerRepositoryArn: !Ref JenkinsControllerRepositoryArn
         AdminUsername: !Ref AdminUsername
         AdminPassword: !Ref AdminPassword
+
+Outputs:
+  JenkinsWebUI:
+    Description: 'Jenkins WebUI'
+    Value: !GetAtt ClusterStack.Outputs.LoadBalancer
